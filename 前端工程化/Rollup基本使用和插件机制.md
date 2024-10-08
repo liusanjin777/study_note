@@ -196,7 +196,7 @@ output: {
 
 #### 4. 依赖 external
 
-对于某些第三方库，不希望`rollup`对其进行打包的时候可以使用`external`对其外部化
+**对于某些第三方库，不希望`rollup`对其进行打包的时候可以使用`external`对其外部化**
 
 ```js
 {
@@ -483,3 +483,45 @@ build();
 不同类型的hooks是可以叠加的，`Async`和`sync`可以搭配后面3种的任意一种。
 
 #### build阶段工作流
+
+每一个方块代表一个`hook`，方块的边框颜色代表同步或者异步，方块的填充颜色代表`Parallel`、`Sequential` 和`First` 类型。
+
+<img src="https://raw.githubusercontent.com/liusanjin777/image/main/202410081440570.png" style="zoom:50%;" />
+
+下面来解析一下这个流程图：
+
+- 首先经过`option` 钩子进行配置的转化，生成一个配置对象。
+- 再调用`buildStart`钩子，正式进入构建流程。
+- `Rollup`会进入`resolveId`钩子中解析文件的路径，从入口配置（`input`）中开始寻找。
+- 随后通过`load`钩子来加载模块的内容，会判断当前内容是否缓存，缓存过进入`shouldTransformCachedModule`进行比较，未缓存直接调用`transform`进行转换
+- 紧接着，`rollup`会在`shouldTransformCachedModule`中和缓存的code进行比较，缓存中存在则直接进入下一步，否则进入`transform`针对文件内容进行转换，例如`babel`转译
+- 现在`rollup`拿到转换后的模块内容，进行AST分析，得到所有的`import`内容，调用`moduleParsed`钩子
+  - 如果是普通的`import`，回到`resolveId`钩子中继续解析，往下执行。
+  - 如果是动态的`import`，调用`resolveDynamicImport`钩子去解析路径，解析成功回到load，解析不成功继续回到`resolvedId`钩子
+- 直到所有的`import`都解析成功，就会调用`buildEnd`钩子。`Build`工作阶段结束。
+
+**在`rollup`解析路径的时候，即调用`resolveId`钩子和`resolveDynamicImport`钩子的时候，有些路径可能会被标记为`external`（意为排除），此类路径不参与`rollup build` 过程** 
+
+当`rollup`开启`watch`模式时，内部会初始化一个`watcher`对象，文件的内容发生了变化，那么`watcher`会调用`watchChange`重新进行打包，当监视器关闭时，则`Rollup`会调用`closeWatcher`来清除`watcher`对象
+
+#### output工作流程
+
+<img src="https://raw.githubusercontent.com/liusanjin777/image/main/202410081455665.png" style="zoom:50%;" />
+
+- 执行`ouputOptions`钩子，进行输出配置转换。
+- 调用`renderStart`钩子，正式开始打包。
+- 从入口处开始扫描，针对动态`import`采用`renderDynamicImport`钩子进行自定义动态`import`的内容
+- 查看`import.meta`的内容
+  - `import.meta.url`: 调用resolveFileUrl钩子来自定义`url`解析逻辑。
+  - 其他: 调用`resolveImportMeta`钩子来自定义解析逻辑。
+- 并发执行`banner`、`footer`、intro、`outro`钩子（底层采用`Promise.all`来包括这4个钩子），这4个钩子的功能很简单，就是往打包产物的固定位置塞入一些自定义的内容。
+- 接着`rollup`会生成所有`chunk`的内容，针对每个`chunk`会调用`renderChunk`方法进行自定义操作，也就说这个时候就可以操作`chunk`了。
+- 执行`augmentChunkHash`钩子，来决定是否更改`chunk`的`hash`值，在`watch`模式中会比较使用。如果还有其他需要处理的`chunk`，则继续回到上一步。
+- 随后会调用`generateBundle`钩子，这个钩子的入参会包含所有的打包信息，包括`chunk`（打包后的代码）和`asset`（静态资源），你可以在这里删除一些内容，最后这些内容则不会在产物中输出。
+- 当`bundle`调用`close`方式时，调用`closeBundle`钩子。
+
+**上面提到过调用rollup.rollup方法返回的bundle对象里有两个方法：`generate`和`write`，两个方法唯一的区别是后者会把代码写入到磁盘中，同时会触发writeBundle钩子，传入所有的打包产物信息。这个方法和 generateBundle的区别在于，执行的时候产物已经输出到磁盘了，而generateBundle是执行后才输出的产物。**
+
+### 开发Rollup插件
+
+开发rollup插件，实际上就是在编写hook函数，一个rollup插件是各种hook函数的组合。
