@@ -85,7 +85,7 @@ module.exports = {
   rules: [
     {
       test: /\.css$/, // 匹配资源---以.css结尾的文件
-      // ues 里面放置对象 编写顺序：从后往前
+      // use 里面放置对象 编写顺序：从后往前
       use: [
         "style-loader",
         { 
